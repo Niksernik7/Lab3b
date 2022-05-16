@@ -224,22 +224,22 @@ void Delete(Table *table, int mod) {
 void InsertInTable(Table* table) {
     char* str = "Data cannot be empty\n Data : ";
     printf(" Enter\n");
-    printf(" Data : ");
-    char* data;
-    do {
-        data = (char*) enterString();
-        if (strlen(data) != 0)
-            break;
-        printf("%s", str);
-        free(data);
-    } while (1);
     printf(" Key : ");
     char* key;
     do {
-        key = enterString();
+        key = (char*) enterString();
         if (strlen(key) != 0)
             break;
+        printf("%s", str);
         free(key);
+    } while (1);
+    printf("Data : ");
+    char* data;
+    do {
+        data = enterString();
+        if (strlen(data) != 0)
+            break;
+        free(data);
         printf("%s", str);
     } while (1);
     if (!Insert(table, key, data)) {

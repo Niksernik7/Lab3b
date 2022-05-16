@@ -5,7 +5,7 @@ typedef struct DiskTableHeader {
     size_t msize;
     size_t csize;
     KeySpace keySpace[];
-    
+
     // Загрузка таблицы:
     // 1. Считали значения для msize, csize
     // 2. Базируясь на msize, выделили память под DiskTableHeader:
@@ -18,11 +18,60 @@ struct Table{
     struct DiskTableHeader header;
 };
 
+ bool Insert(Table *table, const char* key, const char* data) {
+     if (table->header.csize == table->header.msize) {
+         return false;
+     }
+
+     size_t hashKey = hashFunc(key, table->header.msize);
+     size_t maxRel = 0;
+     for (size_t i = 0; i < table->header.msize; i++) {
+         char* curk = GetStrForDataAndKey(table->header.keySpace[i].LenKey,
+          table->header.keySpace[i].OffsetKey,table->file);
+         if (curk != NULL) {
+             if (strcmp(curk, key) == 0) {
+                 if (table->header.keySpace[i].release > maxRel)
+                     maxRel = table->header.keySpace[i].release;
+             }
+             free(curk);
+         }
+     }
+
+     fseek(table->file, 0L, SEEK_END);
+     long OffsetKey = ftell(table->file);
+     size_t LenKey = strlen(key);
+     size_t LenData = strlen(data);
+     fwrite(key, sizeof(char), LenKey, table->file);
+     fwrite(data, sizeof(char), LenData, table->file);
+
+     size_t i = hashKey;
+     do {
+         if (table->header.keySpace[i].busy == 0) {
+             table->header.keySpace[i].OffsetKey = OffsetKey;
+             table->header.keySpace[i].LenKey = LenKey;
+             table->header.keySpace[i].LenData = LenData;
+             table->header.keySpace[i].busy = 1;
+             table->header.keySpace[i].release = maxRel + 1;
+             table->header.csize++;
+             fseek(table->file, sizeof(table->header.msize), SEEK_SET);
+             fwrite(&table->header.csize, 1, sizeof(table->header.csize), table->file);
+             fseek(table->file, i*sizeof(KeySpace), SEEK_CUR);
+             fwrite(&table->header.keySpace[i], 1, sizeof(KeySpace), table->file);
+             fflush(table->file);
+             return true;
+         }
+         i = (i + 1) % table->header.msize;
+     } while (i != hashKey);
+
+     return 0;
+}
 
 bool FindByKey(const Table* table, const char* key, Vector *result) {
     Item *res = NULL;
     size_t nres = 0; // количество найденных элементов
-    for (size_t i = 0; i < table->header.msize; i++) {
+    size_t hashKey = hashFunc(key, table->header.msize);
+    size_t i = hashKey;
+    do {
         char *curk = GetStrForDataAndKey(table->header.keySpace[i].LenKey,
         table->header.keySpace[i].OffsetKey, table->file);
         if (curk != NULL && table->header.keySpace[i].busy != 0 && strcmp(key, curk) == 0) {
@@ -40,7 +89,8 @@ bool FindByKey(const Table* table, const char* key, Vector *result) {
             nres++;
         } else
             free(curk);
-    }
+        i = (i + 1) % table->header.msize;
+    } while (i != hashKey);
     if (res == NULL) {
         errno = ESRCH;
         return false;
@@ -56,31 +106,34 @@ bool DeleteByKey( Table* table,  const char* key){
     if (!FindByKey(table, key, &result))
         return false;  // НЕТ ТАКИХ ЭЛЕМЕНТОВ
     for (size_t i = 0; i < table->header.msize; i++){
+        char* curk = GetStrForDataAndKey(table->header.keySpace[i].LenKey,
+        table->header.keySpace[i].OffsetKey,table->file);
         for (size_t j = 0; j < result.size; j++){
-            char* curk = GetStrForDataAndKey(table->header.keySpace[i].LenKey,
-            table->header.keySpace[i].OffsetKey,table->file);
             char* ftcurk = result.items[j].key;
             if (curk != NULL && table->header.keySpace[i].busy != 0) {
                 if (strcmp(curk, ftcurk) == 0) {
+                    table->header.keySpace[i].release = 0;
                     table->header.keySpace[i].busy = 0;
                     table->header.csize--;
-                    fseek(table->file, sizeof(DiskTableHeader) + sizeof(table->header.msize), SEEK_SET);
+                    fseek(table->file, sizeof(table->header.msize), SEEK_SET);
                     fwrite(&table->header.csize, 1, sizeof(table->header.csize), table->file);
                     fseek(table->file, i*sizeof(KeySpace), SEEK_CUR);
                     fwrite(&table->header.keySpace[i], 1, sizeof(KeySpace), table->file);
                     fflush(table->file);
                 }
-            free(ftcurk);
-            free(curk);
             }
         }
+        free(curk);
     }
+    freeVector(&result);
     return true;
 }
 
 Item* FindByReleaseKey(const Table* table, const char* key, size_t release){
     Item* res = NULL;
-    for(size_t i = 0; i < table->header.msize; i++) {
+    size_t hashKey = hashFunc(key, table->header.msize);
+    size_t i = hashKey;
+    do {
         char* curk = GetStrForDataAndKey(table->header.keySpace[i].LenKey,
         table->header.keySpace[i].OffsetKey,table->file);
         if (curk != NULL && table->header.keySpace[i].busy != 0 && strcmp(curk, key) == 0 &&
@@ -94,7 +147,8 @@ Item* FindByReleaseKey(const Table* table, const char* key, size_t release){
                 return res;
         }
         free(curk);
-    }
+        i = (i + 1) % table->header.msize;
+    } while (i != hashKey);
     return NULL;
 }
 
@@ -104,6 +158,7 @@ bool DeleteByReleaseKey(Table* table, const char* key, size_t release){
         table->header.keySpace[i].OffsetKey,table->file);
         if (curk != NULL && table->header.keySpace[i].busy != 0) {
             if (strcmp(curk, key) == 0 && (table->header.keySpace[i].release == release)) {
+                table->header.keySpace[i].release = 0;
                 table->header.keySpace[i].busy = 0;
                 table->header.csize--;
                 free(curk);
@@ -145,53 +200,6 @@ bool DeleteByReleaseKey(Table* table, const char* key, size_t release){
 
 
 
- bool Insert(Table *table, const char* data, const char* key) {
-     if (table->header.csize == table->header.msize) {
-         return false;
-     }
-
-     size_t hashKey = hashFunc(key, table->header.msize);
-     size_t maxRel = 0;
-     for (size_t i = 0; i < table->header.msize; i++) {
-         char* curk = GetStrForDataAndKey(table->header.keySpace[i].LenKey,
-          table->header.keySpace[i].OffsetKey,table->file);
-         if (curk != NULL) {
-             if (strcmp(curk, key) == 0) {
-                 if (table->header.keySpace[i].release > maxRel)
-                     maxRel = table->header.keySpace[i].release;
-             }
-             free(curk);
-         }
-     }
-
-     fseek(table->file, 0L, SEEK_END);
-     long OffsetKey = ftell(table->file);
-     size_t LenKey = strlen(key);
-     size_t LenData = strlen(data);
-     fwrite(key, sizeof(char), LenKey, table->file);
-     fwrite(data, sizeof(char), LenData, table->file);
-
-     size_t i = hashKey;
-     do {
-         if (table->header.keySpace[i].busy == 0) {
-             table->header.keySpace[i].OffsetKey = OffsetKey;
-             table->header.keySpace[i].LenKey = LenKey;
-             table->header.keySpace[i].LenData = LenData;
-             table->header.keySpace[i].busy = 1;
-             table->header.keySpace[i].release = maxRel + 1;
-             table->header.csize++;
-             fseek(table->file, sizeof(DiskTableHeader) + sizeof(table->header.msize), SEEK_SET);
-             fwrite(&table->header.csize, 1, sizeof(table->header.csize), table->file);
-             fseek(table->file, i*sizeof(KeySpace), SEEK_CUR);
-             fwrite(&table->header.keySpace[i], 1, sizeof(KeySpace), table->file);
-             fflush(table->file);
-             return true;
-         }
-         i = (i + 1) % table->header.msize;
-     } while (i != hashKey);
-
-     return 0;
-}
 
  void FreeTable(Table* table) {
     free(table);
@@ -201,6 +209,8 @@ bool DeleteByReleaseKey(Table* table, const char* key, size_t release){
 
      for (size_t i = 0; i < table->header.msize; i++){
          const KeySpace *ks = &table->header.keySpace[i];
+         if (ks->busy == 0)
+             continue;
          char* data = GetStrForDataAndKey(ks->LenData,ks->OffsetKey + ks->LenKey,table->file);
          char* key  = GetStrForDataAndKey(ks->LenKey, ks->OffsetKey,table->file);
          fprintf(f, "%d | %s | %s | %zu\n",ks->busy, key, data, ks->release);
@@ -224,3 +234,8 @@ size_t EmptyCheck(const Table* t){
 }
 
 
+void freeVector(Vector *v) {
+    if (v == NULL)
+        return;
+    free(v->items);
+}

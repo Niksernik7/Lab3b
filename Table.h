@@ -42,4 +42,5 @@ bool DeleteByReleaseKey(Table*, const char*, size_t);
  void FreeTable(Table*);
  Table* TableCreate(size_t, FILE*);
  char* GetStrForDataAndKey(size_t, size_t, FILE*);
+ void freeVector(Vector *v);
 #endif
