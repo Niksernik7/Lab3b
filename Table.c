@@ -5,12 +5,6 @@ typedef struct DiskTableHeader {
     size_t msize;
     size_t csize;
     KeySpace keySpace[];
-
-    // Загрузка таблицы:
-    // 1. Считали значения для msize, csize
-    // 2. Базируясь на msize, выделили память под DiskTableHeader:
-    //    malloc(sizeof(DiskTableHeader) + msize * sizeof(KeySpace));
-    // 3. Считываем содержимое keys.
 } DiskTableHeader;
 
 struct Table{
@@ -46,7 +40,7 @@ struct Table{
 
      size_t i = hashKey;
      do {
-         if (table->header.keySpace[i].busy == 0) {
+         if (table->header.keySpace[i].busy == 0 || table->header.keySpace[i].busy == 2) {
              table->header.keySpace[i].OffsetKey = OffsetKey;
              table->header.keySpace[i].LenKey = LenKey;
              table->header.keySpace[i].LenData = LenData;
@@ -113,7 +107,7 @@ bool DeleteByKey( Table* table,  const char* key){
             if (curk != NULL && table->header.keySpace[i].busy != 0) {
                 if (strcmp(curk, ftcurk) == 0) {
                     table->header.keySpace[i].release = 0;
-                    table->header.keySpace[i].busy = 0;
+                    table->header.keySpace[i].busy = 2;
                     table->header.csize--;
                     fseek(table->file, sizeof(table->header.msize), SEEK_SET);
                     fwrite(&table->header.csize, 1, sizeof(table->header.csize), table->file);
@@ -159,7 +153,7 @@ bool DeleteByReleaseKey(Table* table, const char* key, size_t release){
         if (curk != NULL && table->header.keySpace[i].busy != 0) {
             if (strcmp(curk, key) == 0 && (table->header.keySpace[i].release == release)) {
                 table->header.keySpace[i].release = 0;
-                table->header.keySpace[i].busy = 0;
+                table->header.keySpace[i].busy = 2;
                 table->header.csize--;
                 free(curk);
                 return true;
