@@ -196,7 +196,8 @@ bool DeleteByReleaseKey(Table* table, const char* key, size_t release){
 
 
  void FreeTable(Table* table) {
-    free(table);
+     fclose(table->file);
+     free(table);
 }
 
  void TablePrint(Table* table, FILE *f) {
